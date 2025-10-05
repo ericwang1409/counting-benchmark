@@ -163,7 +163,7 @@ def generate_example() -> dict:
         "and put the numerical answer in parentheses.\n"
         f"Type: {category}\n"
         f"List: [{' '.join(words)}]\n"
-        "Answer: ("
+        "Answer: "
     )
     answer = f"({actual_count})"
     return {
