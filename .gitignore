@@ -8,3 +8,5 @@ wheels/
 
 # Virtual environments
 .venv
+
+data/meta-llama-3-8b-instruct.Q4_K_M.gguf

@@ -53,10 +53,11 @@ def run_benchmark(
     temperature: float,
     repeat_penalty: float,
     n_gpu_layers: int,
+    output_path: Path,
 ) -> None:
     llama = Llama(
         model_path=str(model_path),
-        n_ctx=2048,
+        n_ctx=4096,
         n_gpu_layers=n_gpu_layers,
         logits_all=False,
         verbose=False,
@@ -66,35 +67,50 @@ def run_benchmark(
     correct = 0
     no_parse = 0
 
-    for example in dataset:
-        response = llama.create_chat_completion(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a precise assistant. "
-                        "Answer with a single count inside parentheses and nothing else."
-                    ),
-                },
-                {"role": "user", "content": example.prompt},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-            repeat_penalty=repeat_penalty,
-        )
-        choice = response["choices"][0]["message"]["content"].strip()
-        predicted = extract_count(choice)
-        if predicted is None:
-            no_parse += 1
-        else:
-            if predicted == example.gold_count:
-                correct += 1
-        total += 1
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as out_fh:
+        for example in dataset:
+            response = llama.create_chat_completion(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a precise assistant. "
+                            "Answer with a single count inside parentheses and nothing else."
+                        ),
+                    },
+                    {"role": "user", "content": example.prompt},
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                repeat_penalty=repeat_penalty,
+            )
+            choice = response["choices"][0]["message"]["content"].strip()
+            predicted = extract_count(choice)
+            correct_prediction = predicted == example.gold_count if predicted is not None else False
 
-        # Simple running report every 50 examples.
-        if total % 50 == 0:
-            accuracy = correct / total
-            print(f"Processed {total} examples | Accuracy: {accuracy:.3f} | Unparsed: {no_parse}")
+            if predicted is None:
+                no_parse += 1
+            elif correct_prediction:
+                correct += 1
+
+            record = {
+                "prompt": example.prompt,
+                "gold_answer": example.answer,
+                "model_response": choice,
+                "parsed_count": predicted,
+                "correct": correct_prediction,
+            }
+            out_fh.write(json.dumps(record) + "\n")
+
+            total += 1
+
+            # Simple running report every 50 examples.
+            if total % 50 == 0:
+                accuracy = correct / total
+                print(
+                    f"Processed {total} examples | Accuracy: {accuracy:.3f} | Unparsed: {no_parse}"
+                )
 
     final_accuracy = correct / total
     print("\n=== Benchmark Summary ===")
@@ -126,7 +142,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max_tokens",
         type=int,
-        default=8,
+        default=16,
         help="Maximum tokens to generate per example",
     )
     parser.add_argument(
@@ -147,6 +163,12 @@ def parse_args() -> argparse.Namespace:
         default=-1,
         help="Number of layers to keep on GPU/Metal (-1 lets llama.cpp decide)",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("results/meta_llama3_predictions.jsonl"),
+        help="Where to save per-example model responses",
+    )
     args = parser.parse_args()
 
     if args.limit == -1:
@@ -164,6 +186,7 @@ def main() -> None:
         temperature=args.temperature,
         repeat_penalty=args.repeat_penalty,
         n_gpu_layers=args.n_gpu_layers,
+        output_path=args.output,
     )
 
 

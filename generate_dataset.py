@@ -8,19 +8,19 @@ from pathlib import Path
 CATEGORIES = {
     "fruit": [
         "apple",
-        "orange",
         "banana",
         "grape",
-        "pear",
         "kiwi",
         "mango",
-        "cherry",
-        "peach",
+        "papaya",
+        "pear",
         "plum",
         "apricot",
-        "lime",
-        "melon",
-        "papaya",
+        "blueberry",
+        "strawberry",
+        "raspberry",
+        "blackberry",
+        "pineapple",
     ],
     "animal": [
         "dog",
@@ -54,21 +54,21 @@ CATEGORIES = {
         "helicopter",
         "sled",
     ],
-    "color": [
-        "red",
-        "blue",
-        "green",
-        "yellow",
-        "orange",
-        "purple",
-        "pink",
-        "brown",
-        "white",
-        "black",
-        "teal",
-        "violet",
-        "indigo",
-        "silver",
+    "profession": [
+        "doctor",
+        "teacher",
+        "lawyer",
+        "engineer",
+        "nurse",
+        "chef",
+        "pilot",
+        "artist",
+        "firefighter",
+        "scientist",
+        "architect",
+        "plumber",
+        "mechanic",
+        "dentist",
     ],
     "instrument": [
         "guitar",
@@ -92,7 +92,6 @@ CATEGORIES = {
         "leg",
         "foot",
         "head",
-        "eye",
         "ear",
         "nose",
         "mouth",
@@ -137,27 +136,27 @@ VOCABULARY = list({word for words in CATEGORIES.values() for word in words} | se
 
 
 def build_word_list(category: str, target_count: int, length: int) -> list[str]:
-    words = []
     target_words = CATEGORIES[category]
-    # place the matching words
-    for _ in range(target_count):
-        words.append(random.choice(target_words))
-    # fill the rest with distractors that are not target words
+    target_count = min(target_count, len(target_words))
+    targets = random.sample(target_words, k=target_count)
+
     distractor_pool = [w for w in VOCABULARY if w not in target_words]
-    for _ in range(length - target_count):
-        words.append(random.choice(distractor_pool))
+    needed = length - target_count
+    if needed > len(distractor_pool):
+        raise ValueError("Not enough distinct distractors to fill the list")
+    distractors = random.sample(distractor_pool, k=needed)
+
+    words = targets + distractors
     random.shuffle(words)
     return words
 
 
 def generate_example() -> dict:
     category = random.choice(CATEGORY_KEYS)
-    length = random.randint(5, 14)
-    target_count = random.randint(0, length)
-    if target_count > length:
-        target_count = length
+    length = random.randint(3, 5)
+    target_count = random.randint(0, min(length, len(CATEGORIES[category])))
     words = build_word_list(category, target_count, length)
-    # re-count in case duplicates lead to unexpected matches
+    # Re-compute from the final list to guard against bookkeeping mistakes.
     actual_count = sum(word in CATEGORIES[category] for word in words)
     prompt = (
         "Count the number of words in the following list that match the given type, "
