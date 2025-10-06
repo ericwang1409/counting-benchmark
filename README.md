@@ -1,150 +1,91 @@
-# Counting Benchmark: Causal Mediation Analysis
+# Counting Experiments
 
-This repository contains a comprehensive analysis of how large language models perform counting tasks, with a focus on understanding whether models maintain internal running count representations.
+This repository aims to tackle this task:
 
-## Overview
-
-The project investigates whether language models maintain a "running count" representation in their hidden states while processing lists of words. This is tested through causal mediation analysis using activation patching techniques.
-
-## Dataset Generation
-
-The dataset consists of counting prompts with the following structure:
+Given the following type of prompt, a sufficiently large language model will be able to answer with the correct number.
 
 ```
-Count the number of words in the following list that match the given type, and put the numerical answer in parentheses.
+Count the number of words in the following  list that match the given type, and put the numerical answer in parentheses.
 Type: fruit
-List: [apple banana grape pear pillow lamp chair table]
-Answer: 
+List: [dog apple cherry bus cat grape bowl]
+Answer: (
 ```
 
-### Categories
-- **Fruit**: apple, banana, grape, kiwi, mango, papaya, pear, plum, apricot, blueberry, strawberry, raspberry, blackberry, pineapple
-- **Animal**: dog, cat, mouse, lion, tiger, bear, wolf, fox, deer, rabbit, squirrel, bird, fish, snake
-- **Body part**: head, hand, foot, eye, ear, nose, mouth, arm, leg, finger, toe, knee, elbow, shoulder
-- **Instrument**: guitar, piano, violin, drum, trumpet, flute, saxophone, clarinet, cello, harp, organ, banjo
-- **Profession**: doctor, teacher, lawyer, engineer, artist, chef, pilot, nurse, farmer, writer, scientist, musician
-- **Vehicle**: car, truck, bus, train, plane, boat, bike, motorcycle, helicopter, taxi, ambulance, firetruck
+Your task:
 
-## Benchmark Performance
+1. create a dataset of several thousand examples like this.
+2. benchmark some open-weight LMs on solving this task zero-shot (without reasoning tokens)
+3. for a single model, create a causal mediation analysis experiment (patching from one run to another) to answer: "is there a hidden state layer that contains a representation of the running count of matching words, while processing the list of words?"
 
-### Model: Meta-Llama-3-8B-Instruct
+# Question 1
 
-The model shows mixed performance on counting tasks:
+I was able to create a dataset of several thousand examples of this programmatically. By creating a few distinct categories filled with unique words, the program is able to generate many different permutations of these in order to create a wide range of questions of the above type.
 
-**Short Lists (4 words):**
-- Clean prompt: `[apple banana pillow lamp]` → Model predicts 2 ✓ (correct)
-- Corrupt prompt: `[chair banana pillow lamp]` → Model predicts 1 ✓ (correct)
+# Question 2
 
-**Longer Lists (8 words):**
-- Clean prompt: `[apple banana grape pear pillow lamp chair table]` → Model predicts 3 ✗ (should be 4)
-- Corrupt prompt: `[chair desk table lamp pillow lamp chair table]` → Model predicts 0 ✓ (correct)
+I benchmarked meta-llama/Meta-Llama-3-8B-Instruct on this task. I am working on a Macbook Pro M1 machine, so I first started with using the Q4_K_M quantized version. I found that the results were very low, around 10% accurate. I found that the given prompt was a bit confusing because of the last ")" in the prompt, leading to around 60% of responses being in the incorrect format (without the parentheses). By removing that, the accuracy shot up to 77%. Here is the terminal output for a benchmark run of the Q4_K_M run.
 
-### Key Findings
+```
+Processed 50 examples | Accuracy: 0.720 | Unparsed: 0
+Processed 100 examples | Accuracy: 0.770 | Unparsed: 0
+Processed 150 examples | Accuracy: 0.800 | Unparsed: 0
+Processed 200 examples | Accuracy: 0.805 | Unparsed: 0
+Processed 250 examples | Accuracy: 0.776 | Unparsed: 0
+Processed 300 examples | Accuracy: 0.777 | Unparsed: 0
+Processed 350 examples | Accuracy: 0.783 | Unparsed: 0
+Processed 400 examples | Accuracy: 0.782 | Unparsed: 0
+Processed 450 examples | Accuracy: 0.767 | Unparsed: 0
+Processed 500 examples | Accuracy: 0.770 | Unparsed: 0
 
-1. **Model makes counting errors** on longer lists, predicting 3 instead of 4 for 4-fruit lists
-2. **Model is more accurate** on shorter lists and when the count is lower
-3. **Performance degrades** as the number of items to count increases
+=== Benchmark Summary ===
+Examples evaluated: 500
+Accuracy: 0.7700
+Unparsed responses: 0
+```
 
-## Causal Mediation Analysis
+Later on, I ended up spinning up a GH200 on Lambda Cloud for start 3. I redid the benchmarking with the full model from hugging face, and the accuracy dropped a bit. This might be due to chat template formatting or random differences.
 
-### Experimental Design
+```
+Processed 50 examples | Accuracy: 0.560 | Unparsed: 0
+Processed 100 examples | Accuracy: 0.610 | Unparsed: 0
+Processed 150 examples | Accuracy: 0.640 | Unparsed: 0
+Processed 200 examples | Accuracy: 0.645 | Unparsed: 0
+Processed 250 examples | Accuracy: 0.616 | Unparsed: 0
+Processed 300 examples | Accuracy: 0.617 | Unparsed: 0
+Processed 350 examples | Accuracy: 0.623 | Unparsed: 0
+Processed 400 examples | Accuracy: 0.622 | Unparsed: 0
+Processed 450 examples | Accuracy: 0.607 | Unparsed: 0
+Processed 500 examples | Accuracy: 0.610 | Unparsed: 0
 
-The analysis uses activation patching to test whether models maintain running count representations:
+=== Benchmark Summary ===
+Examples evaluated: 500
+Accuracy: 0.6150
+Unparsed responses: 0
+```
+
+# Question 3
+
+This was my methodology for the causal mediation analysis experiment:
 
 1. **Clean Run**: Process a list with the correct items (e.g., 4 fruits)
-2. **Corrupt Run**: Process a list with incorrect items (e.g., 0 fruits)  
+2. **Corrupt Run**: Process a list with incorrect items (e.g., 0 fruits)
 3. **Patching**: Replace activations from clean run into corrupt run at specific positions
 4. **Test**: Does patching recover intermediate counts (1, 2, 3, 4)?
 
-### Results: No Running Count Representation
+I found that there is no running count representation. When patching positions after each word, no layers can recover intermediate counts. Furthermore, no layer consistently predicts the correct count at intermediate positions. The model does not maintain a running count representation. Across multiple experiments with different word combinations, no layer at any position successfully recovered intermediate counts. This suggests the model uses distributed processing rather than explicit state tracking. The counting information appears spread across positions and early layers (0-8) rather than accumulated incrementally at specific positions. The counting emerges holistically rather than through a sequential accumulation mechanism."
 
-**Key Finding**: The model does NOT maintain a running count representation.
+# Example output:
 
-**Evidence:**
-- **Tokenization Mismatch**: Clean and corrupt prompts tokenize differently, preventing position-based patching
-- **No Position Recovery**: When patching positions after each word, no layers can recover intermediate counts
-- **All Layers Fail**: No layer consistently predicts the correct count at intermediate positions
-
-**Example Results:**
 ```
---- Testing after processing 1 word(s) ---
-Expected count for first 1 words: 1
-→ No layers correctly predict count=1
-
---- Testing after processing 2 word(s) ---  
-Expected count for first 2 words: 2
-→ No layers correctly predict count=2
-
---- Testing after processing 3 word(s) ---
-Expected count for first 3 words: 3  
-→ No layers correctly predict count=3
-```
-
-### What This Means
-
-The model's counting mechanism is:
-
-1. **Not position-based**: Cannot handle tokenization differences between prompts
-2. **Not running count-based**: Does not maintain incremental counting state
-3. **More sophisticated**: Likely processes the entire sequence before making the final count decision
-
-## Technical Implementation
-
-### Dependencies
-- `transformer-lens>=2.15.0,<2.16.0`
-- `transformers>=4.43,<4.50`
-- `torch>=2.8.0`
-
-### Usage
-
-```bash
-# Run causal mediation analysis
-python analysis/causal_mediation.py \
-    --clean_words apple banana grape pear \
-    --corrupt_words chair desk table lamp
-
-# Run benchmark evaluation  
-python benchmark_meta_llama3_hf.py
-```
-
-### Key Files
-
-- `analysis/causal_mediation.py`: Causal mediation analysis implementation
-- `benchmark_meta_llama3_hf.py`: Benchmark evaluation script
-- `generate_dataset.py`: Dataset generation utilities
-- `data/counting_dataset.jsonl`: Generated counting dataset
-
-## Conclusion
-
-This analysis provides strong evidence that large language models do not maintain running count representations in their hidden states. Instead, they use more sophisticated mechanisms that process entire sequences before making counting decisions. The tokenization mismatch issues further support this conclusion, as a robust running count system would need to handle such variations.
-
-The findings suggest that models' counting abilities rely on distributed processing across multiple layers rather than maintaining explicit counting state, which has implications for understanding how models perform arithmetic and sequential reasoning tasks.
-
-
-ubuntu@192-222-51-240:~/counting-benchmark$  python analysis/causal_mediation.py --clean_words apple grape pillow lamp mango chair banana table --corrupt_words chair table pillow lamp lamp chair desk table
-/usr/lib/python3/dist-packages/scipy/__init__.py:146: UserWarning: A NumPy version >=1.17.3 and <1.25.0 is required for this version of SciPy (detected version 1.26.4
-  warnings.warn(f"A NumPy version >={np_minversion} and <{np_maxversion}"
-2025-10-06 00:40:57.854917: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:467] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
-WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
-E0000 00:00:1759711257.864967   20328 cuda_dnn.cc:8579] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
-E0000 00:00:1759711257.869159   20328 cuda_blas.cc:1407] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
-W0000 00:00:1759711257.874282   20328 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-W0000 00:00:1759711257.874309   20328 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-W0000 00:00:1759711257.874319   20328 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-W0000 00:00:1759711257.874321   20328 computation_placer.cc:177] computation placer already registered. Please check linkage and avoid linking the same target more than once.
-Loading checkpoint shards: 100%|███████████████████████████████████████████████████████████████████████████| 4/4 [00:00<00:00,  4.12it/s]
-WARNING:root:With reduced precision, it is advised to use `from_pretrained_no_processing` instead of `from_pretrained`.
-WARNING:root:You are not using LayerNorm, so the writing weights can't be centered! Skipping
-Loaded pretrained model meta-llama/Meta-Llama-3-8B-Instruct into HookedTransformer
 === Prompt Summary ===
 Clean prompt: Count the number of words in the following list that match the given type, and put the numerical answer in parentheses.
 Type: fruit
 List: [apple grape pillow lamp mango chair banana table]
-Answer: 
+Answer:
 Corrupt prompt: Count the number of words in the following list that match the given type, and put the numerical answer in parentheses.
 Type: fruit
 List: [chair table pillow lamp lamp chair desk table]
-Answer: 
+Answer:
 Clean count: 4 | Corrupt count: 0
 Model clean prediction: 4 (prob: 0.6387)
 Model corrupt prediction: 0 (prob: 0.9780)
@@ -203,132 +144,133 @@ Testing if there's a layer that maintains a running count...
 Position after word 1: clean_pos=31, corrupt_pos=31
 Expected count for first 1 words: 1
 Results (looking for prediction = 1):
-  Layer 13: pred=0 prob=0.9810 ✗
-  Layer 21: pred=0 prob=0.9790 ✗
-  Layer 22: pred=0 prob=0.9790 ✗
-  Layer 23: pred=0 prob=0.9790 ✗
-  Layer 24: pred=0 prob=0.9790 ✗
-  Layer 14: pred=0 prob=0.9785 ✗
-  Layer 15: pred=0 prob=0.9785 ✗
-  Layer 16: pred=0 prob=0.9785 ✗
-  Layer 17: pred=0 prob=0.9785 ✗
-  Layer 18: pred=0 prob=0.9785 ✗
-  → No layers correctly predict count=1
+Layer 13: pred=0 prob=0.9810 ✗
+Layer 21: pred=0 prob=0.9790 ✗
+Layer 22: pred=0 prob=0.9790 ✗
+Layer 23: pred=0 prob=0.9790 ✗
+Layer 24: pred=0 prob=0.9790 ✗
+Layer 14: pred=0 prob=0.9785 ✗
+Layer 15: pred=0 prob=0.9785 ✗
+Layer 16: pred=0 prob=0.9785 ✗
+Layer 17: pred=0 prob=0.9785 ✗
+Layer 18: pred=0 prob=0.9785 ✗
+→ No layers correctly predict count=1
 
 --- Testing after processing 2 word(s) ---
 Position after word 2: clean_pos=32, corrupt_pos=32
 Expected count for first 2 words: 2
 Results (looking for prediction = 2):
-  Layer 02: pred=1 prob=0.9863 ✗
-  Layer 01: pred=1 prob=0.9858 ✗
-  Layer 00: pred=1 prob=0.9849 ✗
-  Layer 03: pred=1 prob=0.9849 ✗
-  Layer 13: pred=0 prob=0.9814 ✗
-  Layer 05: pred=1 prob=0.9805 ✗
-  Layer 04: pred=1 prob=0.9800 ✗
-  Layer 16: pred=0 prob=0.9780 ✗
-  Layer 17: pred=0 prob=0.9780 ✗
-  Layer 18: pred=0 prob=0.9780 ✗
-  → No layers correctly predict count=2
+Layer 02: pred=1 prob=0.9863 ✗
+Layer 01: pred=1 prob=0.9858 ✗
+Layer 00: pred=1 prob=0.9849 ✗
+Layer 03: pred=1 prob=0.9849 ✗
+Layer 13: pred=0 prob=0.9814 ✗
+Layer 05: pred=1 prob=0.9805 ✗
+Layer 04: pred=1 prob=0.9800 ✗
+Layer 16: pred=0 prob=0.9780 ✗
+Layer 17: pred=0 prob=0.9780 ✗
+Layer 18: pred=0 prob=0.9780 ✗
+→ No layers correctly predict count=2
 
 --- Testing after processing 3 word(s) ---
 Position after word 3: clean_pos=33, corrupt_pos=33
 Expected count for first 3 words: 2
 Results (looking for prediction = 2):
-  Layer 01: pred=0 prob=0.9790 ✗
-  Layer 03: pred=0 prob=0.9790 ✗
-  Layer 02: pred=0 prob=0.9785 ✗
-  Layer 04: pred=0 prob=0.9785 ✗
-  Layer 05: pred=0 prob=0.9780 ✗
-  Layer 13: pred=0 prob=0.9780 ✗
-  Layer 15: pred=0 prob=0.9780 ✗
-  Layer 16: pred=0 prob=0.9780 ✗
-  Layer 17: pred=0 prob=0.9780 ✗
-  Layer 18: pred=0 prob=0.9780 ✗
-  → No layers correctly predict count=2
+Layer 01: pred=0 prob=0.9790 ✗
+Layer 03: pred=0 prob=0.9790 ✗
+Layer 02: pred=0 prob=0.9785 ✗
+Layer 04: pred=0 prob=0.9785 ✗
+Layer 05: pred=0 prob=0.9780 ✗
+Layer 13: pred=0 prob=0.9780 ✗
+Layer 15: pred=0 prob=0.9780 ✗
+Layer 16: pred=0 prob=0.9780 ✗
+Layer 17: pred=0 prob=0.9780 ✗
+Layer 18: pred=0 prob=0.9780 ✗
+→ No layers correctly predict count=2
 
 --- Testing after processing 4 word(s) ---
 Position after word 4: clean_pos=34, corrupt_pos=34
 Expected count for first 4 words: 2
 Results (looking for prediction = 2):
-  Layer 11: pred=0 prob=0.9785 ✗
-  Layer 00: pred=0 prob=0.9780 ✗
-  Layer 01: pred=0 prob=0.9780 ✗
-  Layer 02: pred=0 prob=0.9780 ✗
-  Layer 03: pred=0 prob=0.9780 ✗
-  Layer 04: pred=0 prob=0.9780 ✗
-  Layer 05: pred=0 prob=0.9780 ✗
-  Layer 06: pred=0 prob=0.9780 ✗
-  Layer 07: pred=0 prob=0.9780 ✗
-  Layer 12: pred=0 prob=0.9780 ✗
-  → No layers correctly predict count=2
+Layer 11: pred=0 prob=0.9785 ✗
+Layer 00: pred=0 prob=0.9780 ✗
+Layer 01: pred=0 prob=0.9780 ✗
+Layer 02: pred=0 prob=0.9780 ✗
+Layer 03: pred=0 prob=0.9780 ✗
+Layer 04: pred=0 prob=0.9780 ✗
+Layer 05: pred=0 prob=0.9780 ✗
+Layer 06: pred=0 prob=0.9780 ✗
+Layer 07: pred=0 prob=0.9780 ✗
+Layer 12: pred=0 prob=0.9780 ✗
+→ No layers correctly predict count=2
 
 --- Testing after processing 5 word(s) ---
 Position after word 5: clean_pos=35, corrupt_pos=35
 Expected count for first 5 words: 3
 Results (looking for prediction = 3):
-  Layer 00: pred=1 prob=0.9893 ✗
-  Layer 01: pred=1 prob=0.9893 ✗
-  Layer 02: pred=1 prob=0.9893 ✗
-  Layer 03: pred=1 prob=0.9888 ✗
-  Layer 04: pred=1 prob=0.9888 ✗
-  Layer 05: pred=1 prob=0.9883 ✗
-  Layer 06: pred=1 prob=0.9883 ✗
-  Layer 07: pred=1 prob=0.9883 ✗
-  Layer 08: pred=1 prob=0.9883 ✗
-  Layer 09: pred=1 prob=0.9873 ✗
-  → No layers correctly predict count=3
+Layer 00: pred=1 prob=0.9893 ✗
+Layer 01: pred=1 prob=0.9893 ✗
+Layer 02: pred=1 prob=0.9893 ✗
+Layer 03: pred=1 prob=0.9888 ✗
+Layer 04: pred=1 prob=0.9888 ✗
+Layer 05: pred=1 prob=0.9883 ✗
+Layer 06: pred=1 prob=0.9883 ✗
+Layer 07: pred=1 prob=0.9883 ✗
+Layer 08: pred=1 prob=0.9883 ✗
+Layer 09: pred=1 prob=0.9873 ✗
+→ No layers correctly predict count=3
 
 --- Testing after processing 6 word(s) ---
 Position after word 6: clean_pos=36, corrupt_pos=36
 Expected count for first 6 words: 3
 Results (looking for prediction = 3):
-  Layer 08: pred=0 prob=0.9800 ✗
-  Layer 05: pred=0 prob=0.9795 ✗
-  Layer 07: pred=0 prob=0.9795 ✗
-  Layer 06: pred=0 prob=0.9790 ✗
-  Layer 01: pred=0 prob=0.9785 ✗
-  Layer 02: pred=0 prob=0.9785 ✗
-  Layer 04: pred=0 prob=0.9785 ✗
-  Layer 15: pred=0 prob=0.9785 ✗
-  Layer 03: pred=0 prob=0.9780 ✗
-  Layer 10: pred=0 prob=0.9780 ✗
-  → No layers correctly predict count=3
+Layer 08: pred=0 prob=0.9800 ✗
+Layer 05: pred=0 prob=0.9795 ✗
+Layer 07: pred=0 prob=0.9795 ✗
+Layer 06: pred=0 prob=0.9790 ✗
+Layer 01: pred=0 prob=0.9785 ✗
+Layer 02: pred=0 prob=0.9785 ✗
+Layer 04: pred=0 prob=0.9785 ✗
+Layer 15: pred=0 prob=0.9785 ✗
+Layer 03: pred=0 prob=0.9780 ✗
+Layer 10: pred=0 prob=0.9780 ✗
+→ No layers correctly predict count=3
 
 --- Testing after processing 7 word(s) ---
 Position after word 7: clean_pos=37, corrupt_pos=37
 Expected count for first 7 words: 4
 Results (looking for prediction = 4):
-  Layer 01: pred=1 prob=0.9893 ✗
-  Layer 02: pred=1 prob=0.9893 ✗
-  Layer 03: pred=1 prob=0.9893 ✗
-  Layer 04: pred=1 prob=0.9893 ✗
-  Layer 00: pred=1 prob=0.9888 ✗
-  Layer 05: pred=1 prob=0.9883 ✗
-  Layer 06: pred=1 prob=0.9878 ✗
-  Layer 07: pred=1 prob=0.9844 ✗
-  Layer 09: pred=1 prob=0.9810 ✗
-  Layer 08: pred=1 prob=0.9790 ✗
-  → No layers correctly predict count=4
+Layer 01: pred=1 prob=0.9893 ✗
+Layer 02: pred=1 prob=0.9893 ✗
+Layer 03: pred=1 prob=0.9893 ✗
+Layer 04: pred=1 prob=0.9893 ✗
+Layer 00: pred=1 prob=0.9888 ✗
+Layer 05: pred=1 prob=0.9883 ✗
+Layer 06: pred=1 prob=0.9878 ✗
+Layer 07: pred=1 prob=0.9844 ✗
+Layer 09: pred=1 prob=0.9810 ✗
+Layer 08: pred=1 prob=0.9790 ✗
+→ No layers correctly predict count=4
 
 --- Testing after processing 8 word(s) ---
 Position after word 8: clean_pos=38, corrupt_pos=38
 Expected count for first 8 words: 4
 Results (looking for prediction = 4):
-  Layer 02: pred=0 prob=0.9790 ✗
-  Layer 03: pred=0 prob=0.9790 ✗
-  Layer 05: pred=0 prob=0.9790 ✗
-  Layer 06: pred=0 prob=0.9790 ✗
-  Layer 07: pred=0 prob=0.9790 ✗
-  Layer 08: pred=0 prob=0.9790 ✗
-  Layer 04: pred=0 prob=0.9785 ✗
-  Layer 01: pred=0 prob=0.9780 ✗
-  Layer 14: pred=0 prob=0.9780 ✗
-  Layer 15: pred=0 prob=0.9780 ✗
-  → No layers correctly predict count=4
+Layer 02: pred=0 prob=0.9790 ✗
+Layer 03: pred=0 prob=0.9790 ✗
+Layer 05: pred=0 prob=0.9790 ✗
+Layer 06: pred=0 prob=0.9790 ✗
+Layer 07: pred=0 prob=0.9790 ✗
+Layer 08: pred=0 prob=0.9790 ✗
+Layer 04: pred=0 prob=0.9785 ✗
+Layer 01: pred=0 prob=0.9780 ✗
+Layer 14: pred=0 prob=0.9780 ✗
+Layer 15: pred=0 prob=0.9780 ✗
+→ No layers correctly predict count=4
 
 === Summary: Which layers consistently maintain running count? ===
 Looking for layers that work across multiple word positions...
 
 No layers work consistently across multiple positions.
 This suggests the model does NOT maintain a running count representation.
+```
