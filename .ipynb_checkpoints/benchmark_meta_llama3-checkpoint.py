@@ -1,4 +1,4 @@
-"""Benchmark Meta-Llama-3-8B-Instruct via Hugging Face transformers."""
+"""Benchmark Meta-Llama-3-8B-Instruct on the counting dataset using llama.cpp bindings."""
 from __future__ import annotations
 
 import argparse
@@ -6,10 +6,9 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, cast
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from llama_cpp import Llama
 
 RESULT_PATTERN = re.compile(r"\((\d+)\)")
 
@@ -44,55 +43,25 @@ def extract_count(text: str) -> int | None:
     match = RESULT_PATTERN.search(text)
     if match:
         return int(match.group(1))
-    # fallback: bare integer
-    digits = re.findall(r"\d+", text)
-    if len(digits) == 1:
-        return int(digits[0])
     return None
 
 
-def device_from_arg(device_arg: str) -> torch.device:
-    if device_arg == "auto":
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        if torch.backends.mps.is_available():
-            return torch.device("mps")
-        return torch.device("cpu")
-    return torch.device(device_arg)
-
-
-def build_messages(prompt: str) -> list[dict[str, str]]:
-    return [
-        {
-            "role": "system",
-            "content": "You are a precise assistant. Answer with a single number in parentheses, e.g. `(3)`.",
-        },
-        {"role": "user", "content": prompt},
-    ]
-
-
 def run_benchmark(
-    model_name: str,
+    model_path: Path,
     dataset: Iterable[Example],
     max_tokens: int,
     temperature: float,
-    top_p: float,
-    device: torch.device,
-    dtype: torch.dtype,
+    repeat_penalty: float,
+    n_gpu_layers: int,
     output_path: Path,
-    batch_size: int,
 ) -> None:
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=dtype,
-        device_map="auto" if device.type == "cuda" else None,
+    llama = Llama(
+        model_path=str(model_path),
+        n_ctx=4096,
+        n_gpu_layers=n_gpu_layers,
+        logits_all=False,
+        verbose=False,
     )
-    model.eval()
-    model.to(device)
 
     total = 0
     correct = 0
@@ -101,23 +70,26 @@ def run_benchmark(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as out_fh:
         for example in dataset:
-            messages = build_messages(example.prompt)
-            prompt_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            inputs = tokenizer(prompt_text, return_tensors="pt").to(device)
-
-            with torch.no_grad():
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=max_tokens,
+            response = cast(
+                dict[str, Any],
+                llama.create_chat_completion(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a precise assistant. "
+                                "Answer with a single count inside parentheses and nothing else."
+                            ),
+                        },
+                        {"role": "user", "content": example.prompt},
+                    ],
                     temperature=temperature,
-                    top_p=top_p,
-                    do_sample=temperature > 0,
-                    pad_token_id=tokenizer.pad_token_id,
-                )
-            completion_tokens = outputs[0, inputs["input_ids"].shape[1] :]
-            decoded = tokenizer.decode(completion_tokens, skip_special_tokens=True).strip()
-
-            predicted = extract_count(decoded)
+                    max_tokens=max_tokens,
+                    repeat_penalty=repeat_penalty,
+                ),
+            )
+            choice = response["choices"][0]["message"]["content"].strip()
+            predicted = extract_count(choice)
             correct_prediction = predicted == example.gold_count if predicted is not None else False
 
             if predicted is None:
@@ -128,13 +100,15 @@ def run_benchmark(
             record = {
                 "prompt": example.prompt,
                 "gold_answer": example.answer,
-                "model_response": decoded,
+                "model_response": choice,
                 "parsed_count": predicted,
                 "correct": correct_prediction,
             }
             out_fh.write(json.dumps(record) + "\n")
 
             total += 1
+
+            # Simple running report every 50 examples.
             if total % 50 == 0:
                 accuracy = correct / total
                 print(
@@ -149,12 +123,12 @@ def run_benchmark(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Benchmark Meta-Llama-3-8B-Instruct via transformers")
+    parser = argparse.ArgumentParser(description="Benchmark Meta-Llama-3-8B on counting dataset")
     parser.add_argument(
         "--model",
-        type=str,
-        default="meta-llama/Meta-Llama-3-8B-Instruct",
-        help="Hugging Face model identifier",
+        type=Path,
+        required=True,
+        help="Path to Meta-Llama-3-8B-Instruct GGUF weights (e.g., .gguf)",
     )
     parser.add_argument(
         "--dataset",
@@ -181,37 +155,25 @@ def parse_args() -> argparse.Namespace:
         help="Sampling temperature",
     )
     parser.add_argument(
-        "--top_p",
+        "--repeat_penalty",
         type=float,
-        default=1,
-        help="Top-p sampling cutoff",
+        default=1.0,
+        help="Repeat penalty parameter for llama.cpp",
     )
     parser.add_argument(
-        "--device",
-        type=str,
-        default="auto",
-        help="Device identifier (auto/cpu/cuda/mps)",
-    )
-    parser.add_argument(
-        "--dtype",
-        type=str,
-        default="bfloat16",
-        choices=["float32", "float16", "bfloat16"],
-        help="Computation dtype",
+        "--n_gpu_layers",
+        type=int,
+        default=-1,
+        help="Number of layers to keep on GPU/Metal (-1 lets llama.cpp decide)",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("results/meta_llama3_hf_predictions.jsonl"),
+        default=Path("results/meta_llama3_predictions.jsonl"),
         help="Where to save per-example model responses",
     )
-    parser.add_argument(
-        "--batch_size",
-        type=int,
-        default=1,
-        help="Batch size (currently only 1 supported; placeholder for future)",
-    )
     args = parser.parse_args()
+
     if args.limit == -1:
         args.limit = None
     return args
@@ -220,18 +182,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     dataset = load_dataset(args.dataset, args.limit)
-    dtype = getattr(torch, args.dtype)
-    device = device_from_arg(args.device)
     run_benchmark(
-        model_name=args.model,
+        model_path=args.model,
         dataset=dataset,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
-        top_p=args.top_p,
-        device=device,
-        dtype=dtype,
+        repeat_penalty=args.repeat_penalty,
+        n_gpu_layers=args.n_gpu_layers,
         output_path=args.output,
-        batch_size=args.batch_size,
     )
 
 
